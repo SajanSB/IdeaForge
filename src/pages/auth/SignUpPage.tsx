@@ -1,182 +1,250 @@
-import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import * as z from 'zod'
-import { IconMail } from '@tabler/icons-react'
-
-import { useAuthStore } from '@/stores/useAuthStore'
-import { GoogleOAuthButton, OrDivider } from '@/components/auth/GoogleOAuthButton'
-import { Button } from '@/components/ui/button'
+import { useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { useAuthStore } from '@/store/useAuthStore'
+import { AuthLayout } from '@/components/shell/AuthLayout'
+import { GoogleIcon } from '@/components/auth/GoogleIcon'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { useToast } from '@/hooks/use-toast'
+import { supabase } from '@/lib/supabase'
+import { Loader2, MailCheck, Check, Eye, EyeOff } from 'lucide-react'
+import { cn, getConfirmPasswordError, getEmailValidationError, getPasswordRequirements, isStrongPassword, isValidEmail } from '@/lib/utils'
 
-const signUpSchema = z.object({
-  email: z.string().min(1, 'Email is required').email('Please enter a valid email address'),
-  password: z.string()
-    .min(8, 'Password must be at least 8 characters')
-    .regex(/[A-Z]/, 'Must contain at least one uppercase letter')
-    .regex(/\d/, 'Must contain at least one number'),
-})
+export function SignupPage() {
+  const [step, setStep] = useState<'form' | 'verify'>('form')
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [emailError, setEmailError] = useState<string | null>(null)
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
+  const [confirmPasswordError, setConfirmPasswordError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const { signUp } = useAuthStore()
+  const { toast } = useToast()
+  const [searchParams] = useSearchParams()
+  const nextPath = searchParams.get('next') || '/dashboard'
 
-type SignUpFormValues = z.infer<typeof signUpSchema>
+  const passwordChecks = getPasswordRequirements(password)
+  const passwordOk = isStrongPassword(password)
+  const passwordsMatch = password === confirmPassword && confirmPassword.length > 0
 
-export function SignUpPage() {
-  const { signUp, isLoading } = useAuthStore()
-  const [successEmail, setSuccessEmail] = useState<string | null>(null)
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [resendStatus, setResendStatus] = useState<'idle' | 'sending' | 'sent'>('idle')
+  const handlePasswordChange = (value: string) => {
+    setPassword(value)
+    if (confirmPasswordError && confirmPassword) {
+      setConfirmPasswordError(getConfirmPasswordError(value, confirmPassword))
+    }
+  }
 
-  useEffect(() => {
-    document.title = 'Sign up — IdeaForge'
-  }, [])
+  const handleConfirmPasswordChange = (value: string) => {
+    setConfirmPassword(value)
+    if (confirmPasswordError) {
+      setConfirmPasswordError(getConfirmPasswordError(password, value))
+    }
+  }
 
-  const {
-    register,
-    handleSubmit,
-    formState: { errors },
-  } = useForm<SignUpFormValues>({
-    resolver: zodResolver(signUpSchema),
-    mode: 'onBlur',
-    defaultValues: { email: '', password: '' }
-  })
-
-  const onSubmit = async (values: SignUpFormValues) => {
-    setErrorMessage(null)
-    const { error } = await signUp(values.email, values.password)
+  const handleSignup = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const emailErr = getEmailValidationError(email)
+    if (emailErr) {
+      setEmailError(emailErr)
+      return
+    }
+    if (!name || !passwordOk) return
+    const confirmErr = getConfirmPasswordError(password, confirmPassword)
+    if (confirmErr) {
+      setConfirmPasswordError(confirmErr)
+      return
+    }
+    setLoading(true)
+    const { error } = await signUp(email, password, name)
+    setLoading(false)
     if (error) {
-      setErrorMessage(error)
-    } else {
-      setSuccessEmail(values.email)
+      toast({ title: 'Sign up failed', description: error.message, variant: 'destructive' })
+      return
     }
+    setStep('verify')
   }
 
-  const handleResend = async () => {
-    if (!successEmail) return
-    setResendStatus('sending')
-    const { error } = await signUp(successEmail, 'dummyPassRefire') // Supabase handles resends or signup triggers
-    if (error && !error.includes('already registered')) {
-      // In a real app, resending calls a specific resend endpoint
-      // We can just mock a timeout here for development
+  const handleGoogle = async () => {
+    setLoading(true)
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: `${window.location.origin}${nextPath}` },
+    })
+    if (error) {
+      setLoading(false)
+      toast({ title: 'Google sign up failed', description: error.message, variant: 'destructive' })
     }
-    setTimeout(() => {
-      setResendStatus('sent')
-    }, 1000)
-  }
-
-  if (successEmail) {
-    return (
-      <div className="flex justify-center items-center py-10 font-sans">
-        <div className="w-full max-w-[400px] bg-white border border-[0.5px] border-border rounded-xl p-8 text-center">
-          <div className="w-12 h-12 bg-amber-tint text-amber-primary rounded-full flex items-center justify-center mx-auto mb-6">
-            <IconMail size={24} aria-hidden="true" />
-          </div>
-          <h1 className="text-[22px] font-medium tracking-[-0.3px] leading-snug text-ink mb-2">
-            Check your email
-          </h1>
-          <p className="text-sm text-slate leading-relaxed mb-8">
-            We sent a verification link to <strong className="text-ink font-medium">{successEmail}</strong>.
-          </p>
-          <div className="space-y-4">
-            <Button
-              variant="outline"
-              className="w-full text-xs font-semibold py-2.5"
-              onClick={handleResend}
-              disabled={resendStatus === 'sending'}
-            >
-              {resendStatus === 'sending' ? 'Sending...' : resendStatus === 'sent' ? 'Sent!' : 'Resend verification email'}
-            </Button>
-            <div className="pt-2">
-              <Link to="/login" className="text-xs font-semibold text-amber-primary hover:text-amber-primary/90">
-                Back to sign in
-              </Link>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
   }
 
   return (
-    <div className="flex justify-center items-center py-10 font-sans animate-fade-in">
-      <div className="w-full max-w-[400px] bg-white border border-[0.5px] border-border rounded-xl p-8">
-        <div className="text-center mb-6">
-          <h1 className="text-[22px] font-medium tracking-[-0.3px] leading-snug text-ink mb-1.5">
-            Create your account
-          </h1>
-          <p className="text-xs text-slate">
-            Get started scoping your application today
+    <AuthLayout>
+      <div className="space-y-6">
+        <div className="space-y-1.5">
+          <h2 className="text-xl font-semibold tracking-tight text-foreground">
+            {step === 'verify' ? 'Check your email' : 'Create account'}
+          </h2>
+          <p className="text-sm text-chrome-muted">
+            {step === 'verify'
+              ? `We sent a confirmation link to ${email}`
+              : 'Get started with IdeaForge for free.'}
           </p>
         </div>
 
-        <GoogleOAuthButton label="Sign up with Google" />
-        <OrDivider />
+        {step === 'verify' ? (
+          <div className="space-y-5 py-2 text-center">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04]">
+              <MailCheck className="h-7 w-7 text-chrome-muted" />
+            </div>
+            <p className="text-sm leading-relaxed text-chrome-muted">
+              Click the link in the email to activate your account.
+            </p>
+            <button
+              type="button"
+              onClick={() => setStep('form')}
+              className="text-xs text-chrome-subtle transition-colors hover:text-foreground"
+            >
+              ← Back to sign up
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-5">
+            <button
+              type="button"
+              className="btn-secondary w-full"
+              onClick={handleGoogle}
+              disabled={loading}
+            >
+              <GoogleIcon />
+              Continue with Google
+            </button>
 
-        {errorMessage && (
-          <p role="alert" className="text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded p-3 mb-4">
-            {errorMessage}
-          </p>
+            <div className="auth-divider">
+              <span className="text-xs text-chrome-subtle">or</span>
+            </div>
+
+            <form onSubmit={handleSignup} className="space-y-4">
+              <div className="space-y-2">
+                <Label className="text-chrome-muted">Full name</Label>
+                <Input
+                  placeholder="Your full name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  required
+                  disabled={loading}
+                  autoComplete="name"
+                  className="auth-input"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-chrome-muted">Email</Label>
+                <Input
+                  type="email"
+                  placeholder="you@company.com"
+                  value={email}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    setEmail(value)
+                    if (emailError) setEmailError(getEmailValidationError(value))
+                  }}
+                  onBlur={() => setEmailError(getEmailValidationError(email))}
+                  required
+                  disabled={loading}
+                  autoComplete="email"
+                  aria-invalid={!!emailError}
+                  className={cn('auth-input', emailError && 'border-destructive/50')}
+                />
+                {emailError && (
+                  <p className="text-xs text-destructive">{emailError}</p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label className="text-chrome-muted">Password</Label>
+                <div className="relative">
+                  <Input
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Create a password"
+                    value={password}
+                    onChange={(e) => handlePasswordChange(e.target.value)}
+                    required
+                    disabled={loading}
+                    autoComplete="new-password"
+                    className="auth-input pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-chrome-muted transition-colors hover:text-foreground"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {passwordChecks.map(({ check, label }) => (
+                    <span
+                      key={label}
+                      className={cn(
+                        'rounded border px-2 py-0.5 font-mono text-[10px]',
+                        check
+                          ? 'border-success/30 bg-success/10 text-success'
+                          : 'border-white/10 text-chrome-subtle',
+                      )}
+                    >
+                      {check && <Check className="mr-0.5 inline h-2.5 w-2.5" />}
+                      {label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-chrome-muted">Confirm password</Label>
+                <div className="relative">
+                  <Input
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    placeholder="Re-enter your password"
+                    value={confirmPassword}
+                    onChange={(e) => handleConfirmPasswordChange(e.target.value)}
+                    onBlur={() => setConfirmPasswordError(getConfirmPasswordError(password, confirmPassword))}
+                    required
+                    disabled={loading}
+                    autoComplete="new-password"
+                    aria-invalid={!!confirmPasswordError}
+                    className={cn('auth-input pr-10', confirmPasswordError && 'border-destructive/50')}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword((v) => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-chrome-muted transition-colors hover:text-foreground"
+                    aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+                {confirmPasswordError && (
+                  <p className="text-xs text-destructive">{confirmPasswordError}</p>
+                )}
+              </div>
+              <button
+                type="submit"
+                className="btn-primary w-full"
+                disabled={loading || !name || !isValidEmail(email) || !passwordOk || !passwordsMatch}
+              >
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create account'}
+              </button>
+            </form>
+          </div>
         )}
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <div className="flex flex-col">
-            <label htmlFor="email" className="text-[11px] font-medium uppercase tracking-[0.06em] text-slate mb-1">
-              Email address
-            </label>
-            <Input
-              id="email"
-              type="email"
-              placeholder="name@domain.com"
-              {...register('email')}
-              aria-invalid={!!errors.email}
-              aria-describedby={errors.email ? 'email-error' : undefined}
-              className="text-xs py-2 h-9 rounded-lg"
-            />
-            {errors.email && (
-              <p id="email-error" role="alert" className="text-[11px] text-red-600 mt-1">
-                {errors.email.message}
-              </p>
-            )}
-          </div>
-
-          <div className="flex flex-col">
-            <label htmlFor="password" className="text-[11px] font-medium uppercase tracking-[0.06em] text-slate mb-1">
-              Password
-            </label>
-            <Input
-              id="password"
-              type="password"
-              placeholder="••••••••"
-              {...register('password')}
-              aria-invalid={!!errors.password}
-              aria-describedby={errors.password ? 'password-error' : undefined}
-              className="text-xs py-2 h-9 rounded-lg"
-            />
-            {errors.password && (
-              <p id="password-error" role="alert" className="text-[11px] text-red-600 mt-1 leading-normal">
-                {errors.password.message}
-              </p>
-            )}
-          </div>
-
-          <Button
-            type="submit"
-            disabled={isLoading}
-            aria-busy={isLoading}
-            className="w-full bg-amber-primary hover:bg-amber-primary/95 text-[#FFF8ED] text-xs font-semibold py-2.5 h-9 rounded-lg mt-2 cursor-pointer"
-          >
-            {isLoading ? 'Creating account...' : 'Create account'}
-          </Button>
-        </form>
-
-        <div className="text-center mt-6 pt-4 border-t border-[0.5px] border-border">
-          <p className="text-xs text-slate">
-            Already have an account?{' '}
-            <Link to="/login" className="font-semibold text-amber-primary hover:text-amber-primary/90">
-              Sign in
-            </Link>
-          </p>
-        </div>
+        <p className="text-center text-sm text-chrome-muted">
+          Have an account?{' '}
+          <Link to="/login" className="font-medium text-foreground hover:underline">
+            Sign in
+          </Link>
+        </p>
       </div>
-    </div>
+    </AuthLayout>
   )
 }
